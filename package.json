@@ -11,5 +11,9 @@
   },
   "devDependencies": {
     "wrangler": "^3.78.0"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@supabase/supabase-js": "^2.0.0"
   }
 }
