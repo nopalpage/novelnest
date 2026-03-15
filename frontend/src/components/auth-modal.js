@@ -1,4 +1,4 @@
-import { signIn, signUp, signInWithGoogle, sendVerificationCode, verifyCode } from '../lib/auth.js'
+import { signIn, signUp, signInWithGoogleIdToken, sendVerificationCode, verifyCode } from '../lib/auth.js'
 import { toastSuccess, toastError } from '../lib/toast.js'
 
 export function openAuthModal(tab = 'login') {
@@ -150,20 +150,77 @@ function _bind(defaultTab) {
     e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6)
   })
 
-  // ── Google OAuth ──
+  // ── Google OAuth (Intercepted with GSI for 2FA) ──
   document.getElementById('btn-google')?.addEventListener('click', async (e) => {
-    const btn = e.currentTarget
-    btn.disabled = true
-    document.getElementById('google-btn-text').textContent = 'Menghubungkan…'
-    try {
-      await signInWithGoogle()
-      // Halaman akan redirect ke Google, tidak perlu close modal
-    } catch (err) {
-      toastError(err.message)
-      btn.disabled = false
-      document.getElementById('google-btn-text').textContent = 'Lanjutkan dengan Google'
+    e.preventDefault()
+    
+    // Check if we have the client ID
+    const clientId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID
+    if (!clientId) {
+      toastError('VITE_GOOGLE_CLIENT_ID belum di-set di environment!')
+      return
     }
+
+    const btnText = document.getElementById('google-btn-text')
+    btnText.textContent = 'Menunggu Google...'
+
+    // Init Google Identity Services
+    google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleGoogleResponse,
+      cancel_on_tap_outside: false
+    })
+
+    // Show prompt
+    google.accounts.id.prompt((notification) => {
+      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+        toastError('Pop-up diblokir atau di-cancel. Harap ubah setting browser Anda.')
+        btnText.textContent = 'Lanjutkan dengan Google'
+      }
+    })
   })
+
+  // Callback dari Google GSI
+  async function handleGoogleResponse(response) {
+    const btnText = document.getElementById('google-btn-text')
+    const token = response.credential
+    if (!token) {
+      toastError('Google login dibatalkan.')
+      btnText.textContent = 'Lanjutkan dengan Google'
+      return
+    }
+
+    // Decode token untuk mendapatkan email (kita memecah payload JWT)
+    try {
+      btnText.textContent = 'Mengirim OTP...'
+      const payloadBase64 = token.split('.')[1]
+      let decodedJson = atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/'))
+      // Tangani karakter unicode
+      decodedJson = decodeURIComponent(Array.prototype.map.call(decodedJson, function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+      }).join(''))
+      
+      const payload = JSON.parse(decodedJson)
+      const email = payload.email
+
+      if (!email) throw new Error("Email tidak ditemukan di token Google")
+
+      // Kirim kode verifikasi ke email Google
+      await sendVerificationCode(email)
+      
+      // Tampilkan UI Verify dan simpan token di elemen tersembunyi
+      _showVerifyStep(email)
+      
+      // Simpan credential sementara di form-verify
+      document.getElementById('form-verify').dataset.googleToken = token
+      toastSuccess('Kode verifikasi dikirim ke Email Google Anda! 📬')
+
+    } catch (err) {
+      console.error("GSI Error:", err)
+      toastError(err.message || "Gagal memproses Google Login")
+      btnText.textContent = 'Lanjutkan dengan Google'
+    }
+  }
 
   // ── Login ──
   document.getElementById('btn-do-login')?.addEventListener('click', async (e) => {
@@ -208,12 +265,24 @@ function _bind(defaultTab) {
     const btn = e.currentTarget
     const code = document.getElementById('v-code').value.trim()
     const email = document.getElementById('verify-email-display').textContent
+    const googleToken = document.getElementById('form-verify').dataset.googleToken
+
     if (code.length !== 6) { toastError('Kode harus 6 digit'); return }
     btn.disabled = true; btn.textContent = 'Memverifikasi…'
     try {
+      // 1. Verifikasi kode OTP di server
       await verifyCode(email, code)
+      
+      // 2. Tentukan jalur login selanjutnya
+      if (googleToken) {
+        btn.textContent = 'Memproses Google Auth...'
+        await signInWithGoogleIdToken(googleToken)
+        toastSuccess(`Login Google berhasil! Selamat datang 🎉`)
+      } else {
+        toastSuccess('Email terverifikasi! Selamat datang di Novelora 🎉')
+      }
+
       _close()
-      toastSuccess('Email terverifikasi! Selamat datang di Novelora 🎉')
     } catch (err) {
       toastError(err.message)
       document.getElementById('v-code').value = ''
