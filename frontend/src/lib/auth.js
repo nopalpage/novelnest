@@ -122,33 +122,24 @@ export async function signUp(email, password, username) {
   return data
 }
 
+export function getSiteUrl() {
+  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SITE_URL) || window.location.origin
+}
+
 /**
- * Login dengan Google OAuth.
- *
- * FIX UTAMA: Gunakan VITE_SITE_URL (bukan window.location.origin) agar
- * redirect selalu ke https://novelora.my.id — bukan ke URL Supabase dengan
- * domain kamu sebagai path (bug yang menyebabkan error "requested path is invalid").
+ * Login dengan ID Token Google (GSI)
+ * Dipakai setelah user melewati proses verifikasi OTP
  */
-export async function signInWithGoogle() {
+export async function signInWithGoogleIdToken(idToken) {
   if (!sb) throw new Error('Supabase not configured')
-
-  // Prioritas: env var → window.location.origin (fallback localhost)
-  const siteUrl =
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SITE_URL) ||
-    window.location.origin
-
-  const { error } = await sb.auth.signInWithOAuth({
+  const { data, error } = await sb.auth.signInWithIdToken({
     provider: 'google',
-    options: {
-      redirectTo: `${siteUrl}/`,   // ← https://novelora.my.id/
-      queryParams: {
-        access_type: 'offline',
-        prompt: 'consent',
-      },
-    },
+    token: idToken,
   })
   if (error) throw error
+  return data
 }
+
 
 export async function sendVerificationCode(email) {
   const res = await fetch('/api/auth/send-verification', {
